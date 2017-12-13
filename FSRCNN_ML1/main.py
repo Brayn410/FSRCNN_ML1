@@ -20,7 +20,7 @@ flags.DEFINE_float("learning_rate", 0.01, "The learning rate of gradient descent
 flags.DEFINE_float("momentum", 0.9, "The momentum value for the momentum SGD [0.9]")
 
 flags.DEFINE_integer("c_dim", 1, "Dimension of image color [1]")
-flags.DEFINE_integer("scale", 2, "The size of scale factor for preprocessing input image [3]")
+flags.DEFINE_integer("scale", 3, "The size of scale factor for preprocessing input image [3]")
 flags.DEFINE_integer("stride", 4, "The size of stride to apply to input image [4]")
 flags.DEFINE_string("checkpoint_dir", PREFIX_PATH + "checkpoint/", "Name of checkpoint directory [checkpoint]")
 flags.DEFINE_string("output_dir", PREFIX_PATH + "result/", "Name of test output directory [result]")
