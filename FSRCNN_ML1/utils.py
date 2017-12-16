@@ -8,6 +8,7 @@ import h5py
 import random
 from math import floor
 import struct
+import time
 
 import tensorflow as tf
 from PIL import Image  
@@ -36,7 +37,7 @@ def read_data(path):
     label = np.array(hf.get('label'))
     return data, label
 
-def preprocess(path, scale=3):
+def preprocess(path, scale):
   """
   Preprocess single image file 
     (1) Read original image as YCbCr format (and grayscale as default)
@@ -49,15 +50,19 @@ def preprocess(path, scale=3):
   label_ = np.array(list(image.getdata())).astype(np.float).reshape((height, width)) / 255
   image.close()
 
+  # Now we downscale the original image by the scaling factor scale:
   cropped_image = Image.fromarray(modcrop(label_, scale))
   
   (width, height) = cropped_image.size
-  new_width, new_height = int(width / scale), int(height / scale)
+  new_width = int(width / scale)
+  new_height = int(height / scale)
   scaled_image = cropped_image.resize((new_width, new_height), Image.ANTIALIAS)
   cropped_image.close()
 
   (width, height) = scaled_image.size
   input_ = np.array(list(scaled_image.getdata())).astype(np.float).reshape((height, width))
+
+
 
   return input_, label_
 
@@ -72,8 +77,8 @@ def prepare_data(sess, dataset):
     filenames = os.listdir(dataset)
     data_dir = os.path.join(os.getcwd(), dataset)
   else:
-    data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset)), "Set5")
-    # data_dir = FLAGS.PREFIX_PATH + "Test_new/"
+    # data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset)), "Set5")
+    data_dir = FLAGS.PREFIX_PATH + "Test_new/"
   data = sorted(glob.glob(os.path.join(data_dir, "*.bmp")))
 
   return data
@@ -100,7 +105,11 @@ def image_read(path, is_grayscale):
   if is_grayscale:
     return imread(path, flatten=True, mode='YCbCr').astype(np.float)
   else:
-    return imread(path, mode='YCbCr').astype(np.float)
+    # Old Version, I guess this is wrong:
+    # return imread(path, flatten=True, mode='YCbCr').astype(np.float)
+    # New Version, but it still doesn't work:
+    return imread(path, mode='RGB').astype(np.float)
+
 
 def modcrop(image, scale=3):
   """
@@ -140,7 +149,8 @@ def train_input_worker(args):
   for x in range(0, h - image_size - padding + 1, stride):
     for y in range(0, w - image_size - padding + 1, stride):
       sub_input = input_[x + padding : x + padding + image_size, y + padding : y + padding + image_size]
-      x_loc, y_loc = x + label_padding, y + label_padding
+      x_loc = x + label_padding
+      y_loc = y + label_padding
       sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
 
       sub_input = sub_input.reshape([image_size, image_size, 1])
@@ -212,11 +222,17 @@ def train_input_setup(config):
   data = prepare_data(sess, dataset=config.data_dir)
 
   sub_input_sequence, sub_label_sequence = [], []
-  padding = abs(image_size - label_size) / 2 # eg. for 3x: (21 - 11) / 2 = 5
+  padding = int(abs(label_size - image_size) / 2) # for example for 3-times upscaling: (21 - 11) / 2 = 10 / 2 = 5
+  print("image_size =", image_size)
+  print("label_size =", label_size)
+  print("Padding =", padding)
   label_padding = label_size / scale # eg. for 3x: 21 / 3 = 7
 
   for i in range(len(data)):
     input_, label_ = preprocess(data[i], scale)
+
+    array_image_save(input_ * 255, FLAGS.PREFIX_PATH + "result/" + str(i+1) + ". Input_Image.png")
+    array_image_save(label_ * 255, FLAGS.PREFIX_PATH + "result/" + str(i+1) + ". Ground_Truth_Image (Label).png")
 
     if len(input_.shape) == 3:
       h, w, _ = input_.shape
@@ -226,8 +242,17 @@ def train_input_setup(config):
     for x in range(0, int(h - image_size - padding + 1), stride):
       for y in range(0, int(w - image_size - padding + 1), stride):
         sub_input = input_[int(x + padding) : int(x + padding + image_size), int(y + padding) : int(y + padding + image_size)]
-        x_loc, y_loc = x + label_padding, y + label_padding
+        x_loc = x + label_padding
+        y_loc = y + label_padding
         sub_label = label_[int(x_loc * scale) : int(x_loc * scale + label_size), int(y_loc * scale) : int(y_loc * scale + label_size)]
+
+        # Print the very first subimage
+        if i == 0 and x == 0 and y == 0:
+          array_image_save(sub_input * 255, FLAGS.PREFIX_PATH + "result/Sub_Images/Sub Image (Input).png")
+          array_image_save(sub_label * 255, FLAGS.PREFIX_PATH + "result/Sub_Images/Sub Image (GT).png")
+
+        # print("image_size =", image_size)
+        # print("label_size =", label_size)
 
         sub_input = sub_input.reshape([image_size, image_size, 1])
         sub_label = sub_label.reshape([label_size, label_size, 1])
@@ -257,6 +282,9 @@ def test_input_setup(config):
 
   pic_index = 2 # Index of image based on lexicographic order in data folder
   input_, label_ = preprocess(data[pic_index], config.scale)
+
+  array_image_save(input_ * 255, FLAGS.PREFIX_PATH + "result/Input_Image.png")
+  array_image_save(label_ * 255, FLAGS.PREFIX_PATH + "result/Ground_Truth_Image (Label).png")
 
   if len(input_.shape) == 3:
     h, w, _ = input_.shape
@@ -343,8 +371,10 @@ def array_image_save(array, image_path):
   """
   Converts np array to image and saves it
   """
+  # print("Array.shape =", array.shape)
+  # print("Array =", array)
   image = Image.fromarray(array)
   if image.mode != 'RGB':
     image = image.convert('RGB')
   image.save(image_path)
-  print("Saved image: {}".format(image_path))
+  print("Saved image: " + str(image_path))

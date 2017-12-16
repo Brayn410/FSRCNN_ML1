@@ -12,11 +12,12 @@ import pdb
 
 # Based on http://mmlab.ie.cuhk.edu.hk/projects/FSRCNN.html
 class FSRCNN(object):
-  
+
   def __init__(self, sess, config):
     self.sess = sess
     self.fast = config.fast
     self.train = config.train
+    self.seed = config.seed
     self.c_dim = config.c_dim
     self.is_grayscale = (self.c_dim == 1)
     self.epoch = config.epoch
@@ -29,16 +30,19 @@ class FSRCNN(object):
     self.params = config.params
 
     # Different image/label sub-sizes for different scaling factors x2, x3, x4
-    scale_factors = [[14, 20], [11, 21], [10, 24]]
+    # scale_factors = [[14, 20], [11, 21], [10, 24]]
+    scale_factors = [[14,20], [11, 21], [10, 24]]
+
     self.image_size, self.label_size = scale_factors[self.scale - 2]
     # Testing uses different strides to ensure sub-images line up correctly
     if not self.train:
       self.stride = [10, 7, 6][self.scale - 2]
 
     # Different model layer counts and filter sizes for FSRCNN vs FSRCNN-s (fast), (s, d, m) in paper
-    model_params = [[56, 12, 4], [32, 5, 1]]
+    # model_params = [[56, 12, 4], [32, 5, 1]]
+    model_params = [[56, 12, 4], [2, 1, 1]]
     self.model_params = model_params[self.fast]
-    
+
     self.checkpoint_dir = config.checkpoint_dir
     self.output_dir = config.output_dir
     self.data_dir = config.data_dir
@@ -46,8 +50,23 @@ class FSRCNN(object):
 
 
   def build_model(self):
+    # The following two Attributes "self.images" and "self.labels" contain all subimages and sublabels, respectively. The number of subimages differs from a real image (Test-mode) to the batch-size.
+    # Therefore we need two different definitions of those attributes. This can be done by the following Definition:
     self.images = tf.placeholder(tf.float32, [None, self.image_size, self.image_size, self.c_dim], name='images')
     self.labels = tf.placeholder(tf.float32, [None, self.label_size, self.label_size, self.c_dim], name='labels')
+    # Then, "None" will be used as placeholder. Actually there is the following alternative Definition:
+    #       if self.train:
+    #         self.images = tf.placeholder(tf.float32, [self.batch_size, self.image_size, self.image_size, self.c_dim], name='images')
+    #         self.labels = tf.placeholder(tf.float32, [self.batch_size, self.label_size, self.label_size, self.c_dim], name='labels')
+    #       else:
+    #         # I guess, nx and ny are the numbers of x and y coordinates.
+    #         # For example (3-times upscaling -> input subimage has 11 x 11 pixels): Each original image is a union of subimages (11 x 11 for input) and (21 x 21 for ouput). The number of such subimages in the
+    #         # x direction is nx and the number of subimages in the y dircetion is ny. Notice, it does not matter wheater we consider the input-image (image) or the ground-truth-image (label).
+    #         nx, ny = test_input_setup(self)
+    #         self.images = tf.placeholder(tf.float32, [nx*ny, self.image_size, self.image_size, self.c_dim], name='images')
+    #         self.labels = tf.placeholder(tf.float32, [nx*ny, self.label_size, self.label_size, self.c_dim], name='labels')
+    # Perhabs, this explains the idea a bit better, but it tooks more place and more computation time, because we do not know the number nx and ny, therefore we need to call test_input_setup(self)
+
     # Batch size differs in training vs testing
     self.batch = tf.placeholder(tf.int32, shape=[], name='batch')
 
@@ -56,10 +75,10 @@ class FSRCNN(object):
 
     expand_weight, deconv_weight = 'w{}'.format(m + 3), 'w{}'.format(m + 4)
     self.weights = {
-      'w1': tf.Variable(tf.random_normal([5, 5, 1, s], stddev=0.0378, dtype=tf.float32), name='w1'),
-      'w2': tf.Variable(tf.random_normal([1, 1, s, d], stddev=0.3536, dtype=tf.float32), name='w2'),
-      expand_weight: tf.Variable(tf.random_normal([1, 1, d, s], stddev=0.189, dtype=tf.float32), name=expand_weight),
-      deconv_weight: tf.Variable(tf.random_normal([9, 9, 1, s], stddev=0.0001, dtype=tf.float32), name=deconv_weight)
+      'w1': tf.Variable(tf.random_normal([5, 5, 1, s], stddev=0.0378, dtype=tf.float32, seed=self.seed), name='w1'),
+      'w2': tf.Variable(tf.random_normal([1, 1, s, d], stddev=0.3536, dtype=tf.float32, seed=self.seed), name='w2'),
+      expand_weight: tf.Variable(tf.random_normal([1, 1, d, s], stddev=0.189, dtype=tf.float32, seed=self.seed), name=expand_weight),
+      deconv_weight: tf.Variable(tf.random_normal([9, 9, 1, s], stddev=0.0001, dtype=tf.float32, seed=self.seed), name=deconv_weight)
     }
 
     expand_bias, deconv_bias = 'b{}'.format(m + 3), 'b{}'.format(m + 4)
@@ -73,7 +92,7 @@ class FSRCNN(object):
     # Create the m mapping layers weights/biases
     for i in range(3, m + 3):
       weight_name, bias_name = 'w{}'.format(i), 'b{}'.format(i)
-      self.weights[weight_name] = tf.Variable(tf.random_normal([3, 3, d, d], stddev=0.1179, dtype=tf.float32), name=weight_name)
+      self.weights[weight_name] = tf.Variable(tf.random_normal([3, 3, d, d], stddev=0.1179, dtype=tf.float32, seed=self.seed), name=weight_name)
       self.biases[bias_name] = tf.Variable(tf.zeros([d]), name=bias_name)
 
     self.pred = self.model()
@@ -86,7 +105,8 @@ class FSRCNN(object):
   def run(self):
     # SGD with momentum
     # self.train_op = tf.train.MomentumOptimizer(self.learning_rate, self.momentum).minimize(self.loss)
-    self.train_op = tf.train.AdadeltaOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+    # Now we use the Adam-Optimizer instead of SGD (Statistical Gradient Decent)
+    self.train_op = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
     tf.initialize_all_variables().run()
 
     if self.load(self.checkpoint_dir):
@@ -156,11 +176,17 @@ class FSRCNN(object):
     # notify_command = 'notify-send "{}" "{}"'.format(title, notification)
     # os.system(notify_command)
 
-  
+
   def run_test(self):
     nx, ny = test_input_setup(self)
     data_dir = os.path.join('{}'.format(self.checkpoint_dir), "test.h5")
     test_data, test_label = read_data(data_dir)
+
+    test_image = merge(test_data, [nx, ny]).squeeze()
+    print("nx =", nx, "\nny =", ny)
+    print(test_image.shape)
+    print(test_data.shape)
+    # print(test_data)
 
     print("Testing...")
 
@@ -173,7 +199,6 @@ class FSRCNN(object):
     image_path = os.path.join(os.getcwd(), self.output_dir)
     # image_path = os.path.join(image_path, "test_image.png")
     image_path = os.path.join(image_path, "test_image.png")
-
 
     array_image_save(result * 255, image_path)
 
@@ -220,9 +245,8 @@ class FSRCNN(object):
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
 
-    self.saver.save(self.sess,
-                    os.path.join(checkpoint_dir, model_name),
-                    global_step=step)
+    self.saver.save(self.sess, os.path.join(checkpoint_dir, model_name), global_step=step)
+
 
   def load(self, checkpoint_dir):
     print(" [*] Reading checkpoints...")
